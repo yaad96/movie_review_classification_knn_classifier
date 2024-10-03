@@ -1,0 +1,2 @@
+# movie_review_classification_knn_classifier
+Movie review classification using k nearest neighbor classifier
