@@ -15,8 +15,7 @@ class myKNNClassifier:
         self.num_of_neighbors = nn
         self.metric = dist_metric
 
-    def trainClassifier(self, train_data_dist_matrix, train_data_y_matrix):
-        self.train_data_dist_matrix = train_data_dist_matrix
+    def trainClassifier(self, train_data_y_matrix):
         self.train_data_y_matrix = train_data_y_matrix
 
     def classify_test_matrix(self, test_train_data_distance_matrix):
@@ -41,11 +40,11 @@ def perform_cross_validation(train_data, y_data, nn, full_distance_matrix, numbe
         y_training = y_data[training_index]
         y_validation = y_data[validation_index]
 
-        train_train_distance_matrix = full_distance_matrix[np.ix_(training_index, training_index)]
+        # train_train_distance_matrix = full_distance_matrix[np.ix_(training_index, training_index)]
         train_validation_distance_matrix = full_distance_matrix[np.ix_(validation_index, training_index)]
 
         classifier = myKNNClassifier(nn, dist_metric)
-        classifier.trainClassifier(train_train_distance_matrix, y_training)
+        classifier.trainClassifier(y_training)
 
         predictions = classifier.classify_test_matrix(train_validation_distance_matrix)
 
@@ -87,6 +86,9 @@ def exhaustive_parameter_search(train_tfIDF_matrix, y_data, k_list, dist_matric_
                     best_accuracy = current_accuracy
                     best_parameters = {'k_chi': k_chi, 'k': k, 'metric': metric}
 
+                line_to_append = f"k_chi={k_chi} k={k}, metric={metric}, accuracy={current_accuracy * 100:.2f}%"
+                print(line_to_append)
+
                 parameter_stats_list.append({'k_chi': k_chi, 'k': k, 'metric': metric, 'accuracy': current_accuracy})
 
     # Print the best hyperparameters and the corresponding accuracy
@@ -123,9 +125,8 @@ def predict_test_data(train_tfIDF_matrix, test_review_df, train_rating_df, optim
     train_test_distance_matrix = pairwise_distances(selected_test_tfIDF_matrix, selected_train_tfIDF_matrix,
                                                     metric=optimal_metric)
     classifier = myKNNClassifier(dist_metric=optimal_metric, nn=optimal_k)
-    train_train_distance_matrix = pairwise_distances(selected_train_tfIDF_matrix, selected_train_tfIDF_matrix,
-                                                     metric=optimal_metric)
-    classifier.trainClassifier(train_train_distance_matrix, y_data)
+
+    classifier.trainClassifier(y_data)
     predictions = classifier.classify_test_matrix(train_test_distance_matrix)
 
     with open(prediction_file, 'w') as f:
@@ -181,29 +182,21 @@ if __name__ == '__main__':
     train_tfIDF_matrix = tf_idf_vectorizer.fit_transform(train_review_df)  # Do not use .toarray()
     print(f"TF-IDF matrix created. Shape: {train_tfIDF_matrix.shape}, Sparse Format: {issparse(train_tfIDF_matrix)}")
 
-    k_list = [140, 150]
-    chi_k_list = [25000]
-    metric_list = ['cosine', 'euclidean']
+
+    """
+    k_list = [100, 110, 120, 130, 140, 150, 160]
+    chi_k_list = [5000, 10000, 15000, 25000, 30000, 35000, 40000, 45000]
+    metric_list = ['cosine']
 
     exhaustive_parameter_search(train_tfIDF_matrix, train_rating_df.values, k_list, metric_list, 5, chi_k_list)
 
     """
     print("Doing test.............")
-    optimal_k_chi = 35000
-    optimal_k = 110
+    optimal_k_chi = 45000
+    optimal_k = 150
     optimal_metric = 'cosine'
     prediction_file = 'test_predictions.txt'
     predict_test_data(train_tfIDF_matrix, test_review_df, train_rating_df,optimal_k_chi = optimal_k_chi,
                       optimal_k=optimal_k, optimal_metric=optimal_metric, prediction_file=prediction_file)
-
-    """
-
-
-
-
-
-
-
-
 
 

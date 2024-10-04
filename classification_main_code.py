@@ -1,13 +1,194 @@
+import pandas as pd
+import csv
+from bs4 import BeautifulSoup
+import re
+import string
+from tqdm import tqdm
+from joblib import Parallel, delayed
+import nltk
+from spellchecker import SpellChecker
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+from num2words import num2words
+
 import numpy as np
 from sklearn.model_selection import KFold
 from collections import Counter
-import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.feature_selection import SelectKBest, chi2
 from random import sample
 from scipy.sparse import csr_matrix, issparse
-import re
 from sklearn.metrics.pairwise import pairwise_distances
+
+
+def convert_text_to_csv(input_file,output_csv, is_train_file = True):
+    if is_train_file:
+        # Open input file for reading and output file for writing, with utf-8 encoding
+        with open(input_file, 'r', encoding='utf-8') as in_file, open(output_csv, 'w', newline='',
+                                                                      encoding='utf-8') as out_csv:
+            csv_writer = csv.writer(out_csv)
+
+            # Write the header for the CSV file
+            csv_writer.writerow(['review', 'rating'])
+
+            # Process each line in the input file
+            for line in in_file:
+                line = line.strip()  # Remove any leading/trailing whitespace
+                if line.endswith("#EOF"):
+                    rating, review = line.split("\t", 1)  # Split on the first tab to separate label and text
+                    review = review[:-4].strip()  # Remove the '#EOF' from the text
+                    csv_writer.writerow([review, rating])  # Write to CSV
+    else:
+        # Read the text file
+        with open(input_file, 'r', encoding='utf-8') as in_file:
+            test_review_corpus = in_file.read()
+
+        # Split the content by #EOF
+        test_reviews = test_review_corpus.split('#EOF')
+
+        # Remove empty strings and strip unnecessary whitespace
+        test_reviews = [test_review.strip() for test_review in test_reviews if test_review.strip()]
+
+        # Create a DataFrame with a single column 'test_review'
+        df = pd.DataFrame(test_reviews, columns=['test_review'])
+
+        # Save the DataFrame to a CSV file
+        df.to_csv(output_csv, index=False)
+    print("CSV file created successfully.")
+
+
+
+# Function to remove HTML tags from a given text
+def remove_html_tags(review):
+    soup = BeautifulSoup(review, "html.parser")
+    return soup.get_text()
+
+
+# Function to remove URLs
+def remove_urls(review):
+    url_pattern = re.compile(r'https?://\S+|www\.\S+')
+    return url_pattern.sub('', review)
+
+
+# Function to remove non-alphanumeric characters
+def remove_non_an_chars(review):
+    refined_review = re.sub(r'[^a-zA-Z0-9\s]', '', review)
+    return refined_review
+
+
+# Function to remove punctuation
+def remove_punctuation(review):
+    refined_review = review.translate(str.maketrans("", "", string.punctuation))
+    return refined_review
+
+
+# Function to replace numbers with words
+def replace_number_with_word(review):
+    review_words = []
+    for word in review.split():
+        if word.isdigit():
+            review_words.append(num2words(int(word)))
+        else:
+            review_words.append(word)
+    refined_review = ' '.join(review_words)
+    return refined_review
+
+
+# Function to remove and manage whitespace
+def remove_whitespace(review):
+    refined_review = re.sub(r"\s\s+", " ", review)
+    return refined_review
+
+
+# Function to make all text lowercase
+def make_lowercase(review):
+    review = review.lower()
+    return review
+
+
+# Function to remove stopwords
+def remove_stopwords(review):
+    words = word_tokenize(review)
+    filtered_words = [word for word in words if word.lower() not in STOP_WORDS]
+    return ' '.join(filtered_words)
+
+
+# Spelling correction (CPU-bound)
+def correct_spelling(review):
+    spell = SpellChecker()
+    corrected_review_words = []
+    try:
+        for word in review.split():
+            corrected_word = spell.correction(word)
+            if corrected_word is None:
+                corrected_review_words.append(word)
+            else:
+                corrected_review_words.append(corrected_word)
+
+        refined_review = ' '.join(corrected_review_words)
+        return refined_review
+    except:
+        print("Some issue in spell correction")
+        return review
+
+
+# Preprocessing function that applies all the steps
+def preprocess_review(review):
+    review = remove_html_tags(review)
+    review = remove_urls(review)
+    review = remove_non_an_chars(review)
+    review = remove_punctuation(review)
+    review = replace_number_with_word(review)
+    review = remove_whitespace(review)
+    review = make_lowercase(review)
+    review = remove_stopwords(review)
+    # review = correct_spelling(review)
+    return review
+
+
+# Reading and processing the CSV file in batches
+def process_csv_in_batches(unprocessed_csv, processed_csv, batch_size=5000, is_train_csv=True):
+    for i, batch in enumerate(tqdm(pd.read_csv(unprocessed_csv, chunksize=batch_size))):
+
+        if is_train_csv:
+            reviews_batch = batch['review'].tolist()
+        else:
+            reviews_batch = batch['test_review'].tolist()
+
+        # Apply parallel processing on each individual review in the batch
+        processed_reviews = Parallel(n_jobs=-1)(delayed(preprocess_review)(review) for review in reviews_batch)
+
+        # Update the chunk with processed reviews
+        if (is_train_csv):
+            batch['review'] = processed_reviews
+
+            # Rename the column to "review" instead of "test_review"
+            batch.rename(columns={'review': 'review'}, inplace=True)
+
+        else:
+            batch['test_review'] = processed_reviews
+
+            # Rename the column to "review" instead of "test_review"
+            batch.rename(columns={'test_review': 'review'}, inplace=True)
+
+        # For the first chunk, write with headers; for others, append without headers
+        if i == 0:
+            batch.to_csv(processed_csv, index=False, mode='w')  # Write the first chunk (with headers)
+        else:
+            batch.to_csv(processed_csv, index=False, mode='a', header=False)  # Append subsequent chunks (no headers)
+
+
+
+def preprocess_file(original_train_csv, original_test_csv):
+
+    processed_test_csv_file = 'cleaned_test_csv.csv'
+
+    processed_train_csv_file = 'cleaned_train_csv.csv'
+
+    batch_size = 5000  # Adjust the chunk size as necessary
+
+    process_csv_in_batches(original_train_csv, processed_train_csv_file, batch_size, is_train_csv=True)
+    process_csv_in_batches(original_test_csv, processed_test_csv_file, batch_size, is_train_csv=False)
 
 
 class myKNNClassifier:
@@ -139,7 +320,11 @@ def predict_test_data(train_tfIDF_matrix, test_review_df, train_rating_df, optim
 
 
 # next steps to get better results -
-# what to do with original hyphenated wors which got smooshed into one word
+# gather everything (preprocess + main code) into one file
+# prepare the report
+# use other bag of words method
+# go through the project description
+# what to do with original hyphenated words which got smooshed into one word
 # change parameters of TFIDF tokenizer
 # think about spelling corrections
 # change bag of words approach
@@ -147,7 +332,20 @@ def predict_test_data(train_tfIDF_matrix, test_review_df, train_rating_df, optim
 # change the fold-number in kFold and find out if that changes anything
 
 
+# Main execution
+nltk.download('punkt')
+nltk.download('punkt_tab')
+nltk.download('stopwords')
+
+STOP_WORDS = set(stopwords.words('english'))
+
 if __name__ == '__main__':
+    convert_text_to_csv("train_text.txt","train_csv.csv")
+    convert_text_to_csv("test_txt.txt","test_csv.csv",False)
+    print("Text to csv conversion done")
+    preprocess_file("train_csv.csv","test_csv.csv")
+    print("preprocessing done")
+
     full_cleaned_train_df = pd.read_csv("cleaned_train_csv.csv")
     cleaned_train_df = full_cleaned_train_df  # Using the full dataset
     train_review_df = cleaned_train_df['review']
@@ -183,9 +381,9 @@ if __name__ == '__main__':
     print(f"TF-IDF matrix created. Shape: {train_tfIDF_matrix.shape}, Sparse Format: {issparse(train_tfIDF_matrix)}")
 
 
-    """
-    k_list = [100, 110, 120, 130, 140, 150, 160]
-    chi_k_list = [5000, 10000, 15000, 25000, 30000, 35000, 40000, 45000]
+
+    k_list = [140, 150, 160,170,180]
+    chi_k_list = [35000, 40000, 45000,50000,55000]
     metric_list = ['cosine']
 
     exhaustive_parameter_search(train_tfIDF_matrix, train_rating_df.values, k_list, metric_list, 5, chi_k_list)
@@ -198,5 +396,7 @@ if __name__ == '__main__':
     prediction_file = 'test_predictions.txt'
     predict_test_data(train_tfIDF_matrix, test_review_df, train_rating_df,optimal_k_chi = optimal_k_chi,
                       optimal_k=optimal_k, optimal_metric=optimal_metric, prediction_file=prediction_file)
+    """
+
 
 
